@@ -23,7 +23,6 @@
 #import <CoreText/CoreText.h>
 #import <pthread.h>
 
-FILE *markdownin;
 int xng_markdown_consume(char *text, XNGMarkdownParserCode token, yyscan_t scanner);
 
 @interface XNGMarkdownLink ()
@@ -102,7 +101,7 @@ int xng_markdown_consume(char *text, XNGMarkdownParserCode token, yyscan_t scann
     _accum = [[NSMutableAttributedString alloc] init];
 
     const char *cstr = [string UTF8String];
-    markdownin = fmemopen((void *)cstr, [string lengthOfBytesUsingEncoding:NSUTF8StringEncoding], "r");
+    FILE *markdownin = fmemopen((void *)cstr, [string lengthOfBytesUsingEncoding:NSUTF8StringEncoding], "r");
 
     yyscan_t scanner;
 
@@ -176,7 +175,7 @@ int xng_markdown_consume(char *text, XNGMarkdownParserCode token, yyscan_t scann
     style.headIndent = headIndent;
     style.lineSpacing = lineSpacing;
     style.alignment = alignment;
-    style.tabStops = @[[[NSTextTab alloc] initWithTextAlignment:alignment location:firstTabStop options:@{}]];
+    style.tabStops = @[[[NSTextTab alloc] initWithTextAlignment:alignment location:firstTabStop options:nil]];
 
     return @{NSParagraphStyleAttributeName: style};
 #else
@@ -199,9 +198,9 @@ int xng_markdown_consume(char *text, XNGMarkdownParserCode token, yyscan_t scann
     };
 
     CTParagraphStyleRef style;
-    style = CTParagraphStyleCreate(altSettings, sizeof(altSettings) / sizeof(CTParagraphStyleSetting));
+    style = CTParagraphStyleCreate(altSettings, sizeof(altSettings) / sizeof(CTParagraphStyleSetting) );
 
-    if (style == NULL) {
+    if ( style == NULL ) {
         NSLog(@"*** Unable To Create CTParagraphStyle in apply paragraph formatting");
         return nil;
     }
@@ -230,9 +229,9 @@ int xng_markdown_consume(char *text, XNGMarkdownParserCode token, yyscan_t scann
     XNGMarkdownParser *recursiveParser = [self copy];
     recursiveParser->_topFont = font;
 
-    NSAttributedString *recursedString = [recursiveParser attributedStringFromMarkdownString:string];
+    NSAttributedString *recursedString =[recursiveParser attributedStringFromMarkdownString:string];
     NSMutableAttributedString *mutableRecursiveString = [[NSMutableAttributedString alloc] initWithAttributedString:recursedString];
-    [mutableRecursiveString addAttributes:@{NSFontAttributeName: font}
+    [mutableRecursiveString addAttributes:@{NSFontAttributeName : font}
                                     range:NSMakeRange(0, recursedString.length)];
     [_accum appendAttributedString:mutableRecursiveString];
 }
@@ -250,24 +249,6 @@ int xng_markdown_consume(char *text, XNGMarkdownParserCode token, yyscan_t scann
 
     XNGMarkdownParserCode codeToken = token;
     switch (codeToken) {
-        case MARKDOWN_BULLETSTART: {
-            NSInteger numberOfDashes = [textAsString rangeOfString:@" "].location;
-            if (_bulletStarts.count > 0 && _bulletStarts.count <= numberOfDashes) {
-                // Treat nested bullet points as flat ones...
-
-                // Finish off the previous dash and start a new one.
-                NSInteger lastBulletStart = [[_bulletStarts lastObject] intValue];
-                [_bulletStarts removeLastObject];
-
-                [_accum addAttributes:[self paragraphStyle]
-                                range:NSMakeRange(lastBulletStart, _accum.length - lastBulletStart)];
-            }
-
-            [_bulletStarts addObject:@(_accum.length)];
-            textAsString = @"•\t";
-            break;
-        }
-
         case MARKDOWN_EM: { // * *
             textAsString = [textAsString substringWithRange:NSMakeRange(1, textAsString.length - 2)];
             [attributes addEntriesFromDictionary:[self attributesForFontWithName:self.italicFontName]];
@@ -294,16 +275,19 @@ int xng_markdown_consume(char *text, XNGMarkdownParserCode token, yyscan_t scann
             break;
         }
         case MARKDOWN_HEADER: { // ####
-            NSRange rangeOfNonHash = [textAsString rangeOfCharacterFromSet:[[NSCharacterSet characterSetWithCharactersInString:@"#"] invertedSet]];
-            if (rangeOfNonHash.length > 0) {
-                textAsString = [[textAsString substringFromIndex:rangeOfNonHash.location] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+            if([textAsString hasPrefix:@"# "] || [textAsString hasPrefix:@"## "] || [textAsString hasPrefix:@"### "] || [textAsString hasPrefix:@"#### "]  || [textAsString hasPrefix:@"##### "] || [textAsString hasPrefix:@"###### "]){
+                NSRange rangeOfNonHash = [textAsString rangeOfCharacterFromSet:[[NSCharacterSet characterSetWithCharactersInString:@"#"] invertedSet]];
+                if (rangeOfNonHash.length > 0) {
+                    textAsString = [[textAsString substringFromIndex:rangeOfNonHash.location] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
 
-                XNGMarkdownParserHeader header = (XNGMarkdownParserHeader)(rangeOfNonHash.location - 1);
-                [self recurseOnString:textAsString withFont:[self fontForHeader:header]];
+                    XNGMarkdownParserHeader header = (XNGMarkdownParserHeader)(rangeOfNonHash.location - 1);
+                    [self recurseOnString:textAsString withFont:[self fontForHeader:header]];
 
-                // We already appended the recursive parser's results in recurseOnString.
-                textAsString = nil;
+                    // We already appended the recursive parser's results in recurseOnString.
+                    textAsString = nil;
+                }
             }
+            
             break;
         }
         case MARKDOWN_MULTILINEHEADER: {
@@ -338,15 +322,25 @@ int xng_markdown_consume(char *text, XNGMarkdownParserCode token, yyscan_t scann
             }
             break;
         }
-        case MARKDOWN_NEWLINE: {
-            textAsString = @"";
+        case MARKDOWN_BULLETSTART: {
+            NSInteger numberOfDashes = [textAsString rangeOfString:@" "].location;
+            if (_bulletStarts.count > 0 && _bulletStarts.count <= numberOfDashes) {
+                // Treat nested bullet points as flat ones...
+
+                // Finish off the previous dash and start a new one.
+                NSInteger lastBulletStart = [[_bulletStarts lastObject] intValue];
+                [_bulletStarts removeLastObject];
+
+                [_accum addAttributes:[self paragraphStyle]
+                                range:NSMakeRange(lastBulletStart, _accum.length - lastBulletStart)];
+            }
+
+            [_bulletStarts addObject:@(_accum.length)];
+            textAsString = @"•\t";
             break;
         }
-        case MARKDOWN_EMAIL: {
-            XNGMarkdownLink *link = [[XNGMarkdownLink alloc] init];
-            link.url = [@"mailto:" stringByAppendingString:textAsString];
-            link.range = NSMakeRange(_accum.length, textAsString.length);
-            [_links addObject:link];
+        case MARKDOWN_NEWLINE: {
+            textAsString = @"";
             break;
         }
         case MARKDOWN_URL: {
